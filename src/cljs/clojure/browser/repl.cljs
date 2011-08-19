@@ -25,44 +25,38 @@
   "Process a single block of JavaScript received from the server"
   [block]
   (log-obj (str "evaluating: " block))
-  (let [result (try (js* "eval(~{block})")
-                    (catch js/Error e (pr-str e)))]
+  (let [result (pr-str
+                (try {:status :success :value (str (js* "eval(~{block})"))}
+                     (catch js/Error e {:status :exception :value (pr-str e)})))]
     (log-obj (str "result: " result))
-    result))
+    (str result)))
 
 (defn send-result [connection url data]
   (net/transmit connection url "POST" data nil 0))
-
-(defn fetch-block [connection url]
-  (net/transmit connection url "GET" nil nil 0))
 
 (defn start-evaluator
   "Start the REPL server connection."
   [url]
   (if-let [repl-connection (net/xpc-connection)]
-    (let [inbound-connection  (net/xhr-connection)
-          outbound-connection (net/xhr-connection)]
-      (net/register-service repl-connection
-                            :send-result
-                            (partial send-result
-                                     outbound-connection))
-      (net/connect repl-connection
-                   #(log-obj "Child REPL channel connected."))
-      (event/listen outbound-connection
-                    :ready
-                    (fn [e]
-                      (log-obj "outbound-connection ready")
-                      (fetch-block inbound-connection url)))
-      (event/listen inbound-connection
+    (let [connection (net/xhr-connection)]
+      (event/listen connection
                     :success
                     (fn [e]
-                      (log-obj "inbound-connection success")
                       (net/transmit
                        repl-connection
                        :evaluate-javascript
                        (.getResponseText e/currentTarget
                                          ()))))
-      (js/setTimeout #(fetch-block inbound-connection url) 50))
+
+      (net/register-service repl-connection
+                            :send-result
+                            (partial send-result
+                                     connection
+                                     url))
+      (net/connect repl-connection
+                   #(log-obj "Child REPL channel connected."))
+
+      (js/setTimeout #(send-result connection url "ready") 50))
     (js/alert "No 'xpc' param provided to child iframe.")))
 
 (defn connect
